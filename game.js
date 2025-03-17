@@ -1,79 +1,94 @@
-const crypto = require('crypto');
-const readlineSync = require('readline-sync');
+const crypto = require("crypto");
+const readline = require("readline-sync");
 
-function generateHMAC(secretKey, message) {
-    return crypto.createHmac('sha3-256', secretKey).update(message).digest('hex');
-}
-
-function validateDiceConfig(diceConfigs) {
-    if (diceConfigs.length < 3) {
-        console.error("Error: You must provide at least 3 dice.");
-        process.exit(1);
+class HMACGenerator {
+    constructor() {
+        this.key = crypto.randomBytes(32).toString("hex");
     }
 
-    for (let dice of diceConfigs) {
-        let sides = dice.split(',').map(s => s.trim());
+    generateHMAC(message) {
+        return crypto.createHmac("sha3-256", this.key).update(message.toString()).digest("hex");
+    }
+}
 
-        if (sides.length !== 6) {
-            console.error(`Error: Invalid number of sides (${sides.length}) in dice: ${dice}`);
-            process.exit(1);
+class Dice {
+    constructor(values) {
+        if (!Array.isArray(values) || values.length !== 6 || !values.every(Number.isInteger)) {
+            throw new Error("Each dice must have exactly 6 integer values.");
         }
+        this.values = values;
+    }
 
-        if (!sides.every(side => /^\d+$/.test(side))) {
-            console.error(`Error: Invalid value found in dice: ${dice}`);
-            process.exit(1);
+    roll() {
+        return this.values[Math.floor(Math.random() * 6)];
+    }
+}
+
+class DiceGame {
+    constructor(diceArray) {
+        if (diceArray.length < 3) {
+            throw new Error("You must provide at least 3 valid dice.");
+        }
+        this.dice = diceArray.map(values => new Dice(values));
+        this.firstMoveHMAC = new HMACGenerator();
+        this.userRollHMAC = new HMACGenerator();
+        this.computerRollHMAC = new HMACGenerator();
+    }
+
+    startGame() {
+        console.log("Welcome to the Provably Fair Dice Game!");
+
+        const firstMove = Math.floor(Math.random() * 2); // 0 = User, 1 = Computer
+        console.log(`First move HMAC: ${this.firstMoveHMAC.generateHMAC(firstMove)}`);
+
+        console.log("First player selection (0=User, 1=Computer):", firstMove);
+
+        const userDiceIndex = this.getUserDiceChoice();
+        const computerDiceIndex = firstMove === 0 ? (userDiceIndex === 0 ? 1 : 0) : 0;
+
+        console.log(`User selects Dice ${userDiceIndex}, Computer selects Dice ${computerDiceIndex}`);
+
+        const userRoll = this.dice[userDiceIndex].roll();
+        const computerRoll = this.dice[computerDiceIndex].roll();
+
+        console.log(`User roll: ${userRoll}, HMAC: ${this.userRollHMAC.generateHMAC(userRoll)}`);
+        console.log(`Computer roll: ${computerRoll}, HMAC: ${this.computerRollHMAC.generateHMAC(computerRoll)}`);
+
+        this.determineWinner(userRoll, computerRoll);
+        this.revealKeys();
+    }
+
+    getUserDiceChoice() {
+        let choice;
+        do {
+            choice = readline.questionInt("Select your dice (0 or 1): ");
+        } while (![0, 1].includes(choice));
+        return choice;
+    }
+
+    determineWinner(userRoll, computerRoll) {
+        if (userRoll > computerRoll) {
+            console.log("User wins!");
+        } else if (userRoll < computerRoll) {
+            console.log("Computer wins!");
+        } else {
+            console.log("It's a tie!");
         }
     }
-}
 
-const args = process.argv.slice(2);
-validateDiceConfig(args);
-
-const dice = args.map(d => d.split(',').map(Number));
-
-const firstPlayer = Math.floor(Math.random() * 2);
-console.log(`First player selection (0=User, 1=Computer): ${firstPlayer}`);
-
-let userDiceIndex, computerDiceIndex;
-if (firstPlayer === 0) {
-    userDiceIndex = readlineSync.questionInt(`Enter your dice choice (0-${dice.length - 1}): `);
-    if (userDiceIndex < 0 || userDiceIndex >= dice.length) {
-        console.error("Error: Invalid dice selection.");
-        process.exit(1);
+    revealKeys() {
+        console.log("\nRevealing Keys:");
+        console.log(`First move key: ${this.firstMoveHMAC.key}`);
+        console.log(`User roll key: ${this.userRollHMAC.key}`);
+        console.log(`Computer roll key: ${this.computerRollHMAC.key}`);
     }
-    computerDiceIndex = (userDiceIndex + 1) % dice.length; 
-} else {
-    computerDiceIndex = Math.floor(Math.random() * dice.length);
-    userDiceIndex = (computerDiceIndex + 1) % dice.length; 
 }
 
-console.log(`User selects Dice ${userDiceIndex}, Computer selects Dice ${computerDiceIndex}`);
-
-const userSecretKey = crypto.randomBytes(16).toString('hex');
-const computerSecretKey = crypto.randomBytes(16).toString('hex');
-
-const userRollIndex = Math.floor(Math.random() * 6);
-const computerRollIndex = Math.floor(Math.random() * 6);
-
-const userRoll = dice[userDiceIndex][userRollIndex];
-const computerRoll = dice[computerDiceIndex][computerRollIndex];
-
-const userHMAC = generateHMAC(userSecretKey, userRoll.toString());
-const computerHMAC = generateHMAC(computerSecretKey, computerRoll.toString());
-
-console.log(`User roll: ${userRoll}, HMAC: ${userHMAC}`);
-console.log(`Computer roll: ${computerRoll}, HMAC: ${computerHMAC}`);
-
-if (userRoll > computerRoll) {
-    console.log("User wins!");
-} else if (userRoll < computerRoll) {
-    console.log("Computer wins!");
-} else {
-    console.log("It's a tie!");
+// Run the game
+try {
+    const args = process.argv.slice(2).map(arg => arg.split(",").map(Number));
+    const game = new DiceGame(args);
+    game.startGame();
+} catch (error) {
+    console.error(`Error: ${error.message}`);
 }
-
-console.log("\n=== HMAC Verification ===");
-console.log(`User Secret Key: ${userSecretKey}`);
-console.log(`Computer Secret Key: ${computerSecretKey}`);
-console.log(`User should verify HMAC: ${generateHMAC(userSecretKey, userRoll.toString())}`);
-console.log(`Computer should verify HMAC: ${generateHMAC(computerSecretKey, computerRoll.toString())}`);
